@@ -59,6 +59,7 @@ chat = client.chats.create(
 
 
 passed_values = sys.argv[1:]
+print(os.getenv("GEMINI_API_KEY"))
 # Talk to the agent
 response = chat.send_message(
     passed_values
