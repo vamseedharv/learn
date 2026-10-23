@@ -5,7 +5,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import (
+    calinski_harabasz_score,
+    davies_bouldin_score,
+    silhouette_score,
+)
 
 def write_explanation():
     st.write("## K-means Clustering")
@@ -73,7 +77,7 @@ def write_explanation():
     )
     st.write(
         "The silhouette search below reports the best K among the values tested. "
-        "The final model defaults to the best silhouette K. You can select a different K after reviewing both plots."
+        "The final model defaults to the best silhouette K. You can select a different K after reviewing the plots."
     )
     
     
@@ -83,7 +87,12 @@ FEATURES = ["Study_Hours", "Attendance_Percent"]
 
 
 def evaluate_clusters(X_scaled):
-    """Fit each candidate once and reuse it for both metrics and final results."""
+    """Compare internal clustering scores, reusing each fitted model.
+
+    Silhouette and Calinski-Harabasz favor higher scores; Davies-Bouldin
+    favors lower scores. These scores require 2 through n_samples - 1
+    distinct clusters; invalid cases are reported as NaN.
+    """
     max_k = min(10, len(X_scaled), len(pd.DataFrame(X_scaled).drop_duplicates()))
     models = {}
     rows = []
@@ -91,13 +100,19 @@ def evaluate_clusters(X_scaled):
         model = KMeans(n_clusters=k, random_state=42, n_init=10)
         labels = model.fit_predict(X_scaled)
         cluster_count = len(set(labels))
-        score = (
-            silhouette_score(X_scaled, labels)
-            if 2 <= cluster_count < len(X_scaled)
-            else float("nan")
-        )
+        scores = {
+            "Silhouette score": float("nan"),
+            "Calinski-Harabasz score": float("nan"),
+            "Davies-Bouldin score": float("nan"),
+        }
+        if 2 <= cluster_count < len(X_scaled):
+            scores.update({
+                "Silhouette score": silhouette_score(X_scaled, labels),
+                "Calinski-Harabasz score": calinski_harabasz_score(X_scaled, labels),
+                "Davies-Bouldin score": davies_bouldin_score(X_scaled, labels),
+            })
         models[k] = model
-        rows.append({"K": k, "WCSS": model.inertia_, "Silhouette score": score})
+        rows.append({"K": k, "WCSS": model.inertia_, **scores})
     return pd.DataFrame(rows), models
 
 
@@ -137,7 +152,8 @@ def run(section=None, algorithm=None):
         if not valid_scores.empty else None
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    axes = axes.ravel()
     axes[0].plot(results["K"], results["WCSS"], marker="o")
     axes[0].set(title="Elbow method", xlabel="Number of clusters (K)", ylabel="WCSS (scaled features)")
     axes[1].plot(valid_scores["K"], valid_scores["Silhouette score"], marker="o")
@@ -145,13 +161,24 @@ def run(section=None, algorithm=None):
     if best_k is not None:
         axes[1].axvline(best_k, linestyle="--", color="tab:orange", label=f"Best tested K = {best_k}")
         axes[1].legend()
+    for ax, metric, direction in (
+        (axes[2], "Calinski-Harabasz score", "higher is better"),
+        (axes[3], "Davies-Bouldin score", "lower is better"),
+    ):
+        valid_metric = results.dropna(subset=[metric])
+        ax.plot(valid_metric["K"], valid_metric[metric], marker="o")
+        ax.set(title=f"{metric} ({direction})", xlabel="Number of clusters (K)", ylabel=metric)
     for ax in axes:
         ax.set_xticks(results["K"])
         ax.grid(True, alpha=0.3)
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
-    st.caption("Look for an elbow in WCSS and a higher silhouette score. WCSS alone always favors more clusters.")
+    st.caption(
+        "Look for an elbow in WCSS, higher silhouette and Calinski-Harabasz scores, "
+        "and a lower Davies-Bouldin score. WCSS alone always favors more clusters. "
+        "All scores use standardized features; the metrics may favor different K values."
+    )
     st.dataframe(results, hide_index=True, use_container_width=True)
     if best_k is None:
         st.info("Silhouette scoring requires at least two distinct clusters and fewer clusters than samples. Choose K manually below.")
@@ -167,10 +194,10 @@ def run(section=None, algorithm=None):
     )
     model = models[selected_k]
     selected_result = results.loc[results["K"] == selected_k].iloc[0]
-    wcss_column, silhouette_column = st.columns(2)
-    wcss_column.metric("WCSS", f"{model.inertia_:.2f}")
-    score = selected_result["Silhouette score"]
-    silhouette_column.metric("Silhouette score", f"{score:.4f}" if pd.notna(score) else "Not defined")
+    metric_names = ["WCSS", "Silhouette score", "Calinski-Harabasz score", "Davies-Bouldin score"]
+    for column, metric in zip(st.columns(4), metric_names):
+        score = selected_result[metric]
+        column.metric(metric, f"{score:.4f}" if pd.notna(score) else "Not defined")
 
     centers = scaler.inverse_transform(model.cluster_centers_)
     fig, ax = plt.subplots()
@@ -213,3 +240,27 @@ def run(section=None, algorithm=None):
     labeled_data = df.loc[valid_rows].assign(Cluster=model.labels_)
     labeled_data["Label"] = labeled_data["Cluster"].map(cluster_names)
     st.dataframe(labeled_data)
+
+    # Prepare the data with same features
+    # Use same scaler to transform the new data    
+    # Post scaling, predict the cluster for new data and assign the label based on cluster_names
+
+    #prepare the new data for prediction
+    st.subheader(f"7. Predicting cluster for new data")
+    # Generate data
+    new_data_dataset_name = f"{section}_{algorithm.lower().replace(' ', '_')}_newData.csv"
+    new_data_dataset_name = Path(__file__).resolve().parents[2] / "datasets" / section / new_data_dataset_name
+    new_data = pd.read_csv(new_data_dataset_name)
+    new_df = new_data[FEATURES]
+
+    st.write("New data for prediction:")
+    st.dataframe(new_df, use_container_width=True)
+
+    # Use the same scaler to transform the new data
+    new_data_scaled = scaler.transform(new_df)
+
+    # Predict the cluster for new data
+    new_data['Cluster'] = model.predict(new_data_scaled)
+    new_data['Label'] = new_data['Cluster'].map(cluster_names)
+    st.write("Predicted clusters for new data with labels:")
+    st.dataframe(new_data)

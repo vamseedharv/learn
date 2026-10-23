@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.cluster.hierarchy import linkage, dendrogram, cut_tree
-from sklearn.metrics import silhouette_score
+from ._clustering_common import evaluate_labels, show_score_comparison, show_score_metrics
 
 
 def write_explanation():
@@ -81,13 +81,7 @@ def evaluate_cuts(X_scaled, tree):
     for k in range(1, min(10, len(X_scaled)) + 1):
         labels = cut_tree(tree, n_clusters=[k]).ravel()
         assignments[k] = labels
-        wcss = sum(
-            ((points - points.mean(axis=0)) ** 2).sum()
-            for cluster in np.unique(labels)
-            for points in [X_scaled[labels == cluster]]
-        )
-        score = silhouette_score(X_scaled, labels) if 2 <= k < len(X_scaled) else np.nan
-        rows.append({"K": k, "WCSS": float(wcss), "Silhouette score": score})
+        rows.append({"K": k, **evaluate_labels(X_scaled, labels)})
     return pd.DataFrame(rows), assignments
 
 
@@ -141,23 +135,9 @@ def run(section=None, algorithm=None):
     results, assignments = evaluate_cuts(X_scaled, tree)
     valid_scores = results.dropna(subset=["Silhouette score"])
     best_k = int(valid_scores.loc[valid_scores["Silhouette score"].idxmax(), "K"]) if not valid_scores.empty else None
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    axes[0].plot(results["K"], results["WCSS"], marker="o")
-    axes[0].set(title="WCSS elbow", ylabel="WCSS (scaled features)")
-    axes[1].plot(valid_scores["K"], valid_scores["Silhouette score"], marker="o")
-    axes[1].set(title="Silhouette comparison", ylabel="Silhouette score")
-    if best_k is not None:
-        axes[1].axvline(best_k, color="tab:orange", linestyle="--", label=f"Best tested K = {best_k}")
-        axes[1].legend()
-    for ax in axes:
-        ax.set_xlabel("Number of clusters (K)")
-        ax.set_xticks(results["K"])
-        ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    show_score_comparison(results, "K")
     st.dataframe(results, hide_index=True, use_container_width=True)
-    st.caption("WCSS is calculated from cluster means, not an inertia_ attribute. Compare the elbow, silhouette, and dendrogram before choosing K.")
+    st.caption("WCSS is calculated from cluster means. Compare its elbow, higher silhouette and Calinski-Harabasz scores, lower Davies-Bouldin scores, and the dendrogram before choosing K.")
     if best_k is None:
         st.info("No candidate has a defined silhouette score. Silhouette requires at least two clusters and fewer clusters than observations.")
     else:
@@ -168,10 +148,9 @@ def run(section=None, algorithm=None):
     selected_k = st.selectbox("Number of clusters (K)", options, index=options.index(best_k) if best_k is not None else 0, key=f"hierarchical_k_{method}")
     labels = assignments[selected_k]
     selected_result = results.loc[results["K"] == selected_k].iloc[0]
-    left, right = st.columns(2)
-    left.metric("WCSS", f"{selected_result['WCSS']:.2f}")
-    score = selected_result["Silhouette score"]
-    right.metric("Silhouette score", f"{score:.4f}" if pd.notna(score) else "Not defined")
+    show_score_metrics({name: selected_result[name] for name in (
+        "WCSS", "Silhouette score", "Calinski-Harabasz score", "Davies-Bouldin score"
+    )})
     st.caption("K selects an exact tree cut by merge order. Tied merge heights can mean that a single horizontal distance threshold cannot produce that exact K.")
 
     labeled_data = df.loc[valid_rows].assign(Cluster=labels)

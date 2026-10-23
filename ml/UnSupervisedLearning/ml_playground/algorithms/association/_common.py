@@ -1,7 +1,7 @@
 """Frequent-itemset miners and association-rule presentation."""
 from collections import Counter
 from itertools import combinations
-from math import ceil
+from math import ceil, sqrt
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -93,9 +93,23 @@ def rules_from_itemsets(found, total, confidence):
                 conf = count / found[left]
                 if conf >= confidence:
                     support = count / total
-                    lift = conf / (found[right] / total)
-                    rows.append({"Antecedent": ', '.join(sorted(left)), "Consequent": ', '.join(sorted(right)), "Support": support, "Confidence": conf, "Lift": lift, "Leverage": support - found[left]*found[right]/total**2})
-    columns = ["Antecedent", "Consequent", "Support", "Confidence", "Lift", "Leverage"]
+                    left_support, right_support = found[left] / total, found[right] / total
+                    lift = conf / right_support
+                    # When both confidence and consequent support are 1,
+                    # conviction is 0/0 rather than evidence of a useful rule.
+                    conviction = (
+                        (1 - right_support) / (1 - conf) if conf < 1
+                        else float('inf') if right_support < 1 else float('nan')
+                    )
+                    rows.append({
+                        "Antecedent": ', '.join(sorted(left)), "Consequent": ', '.join(sorted(right)),
+                        "Count": count, "Support": support, "Confidence": conf, "Lift": lift,
+                        "Leverage": support - left_support * right_support,
+                        "Conviction": conviction,
+                        "Jaccard": support / (left_support + right_support - support),
+                        "Cosine": support / sqrt(left_support * right_support),
+                    })
+    columns = ["Antecedent", "Consequent", "Count", "Support", "Confidence", "Lift", "Leverage", "Conviction", "Jaccard", "Cosine"]
     return pd.DataFrame(rows, columns=columns).sort_values(["Lift", "Confidence"], ascending=False)
 
 
@@ -108,6 +122,7 @@ def explanation(name, approach):
     st.write("### Metrics and parameter selection")
     st.write("Support(A) is the fraction of baskets containing A. Confidence(A → B) = support(A ∪ B) / support(A). Lift = confidence / support(B); above 1 indicates positive association, 1 independence, and below 1 negative association. Leverage is support(A ∪ B) - support(A) × support(B).")
     st.write("Choose support according to transaction volume and minimum useful counts. Higher thresholds reduce results and computation but can hide rare patterns. Confidence favors popular consequents, so examine lift and support together. Maximum itemset length controls complexity.")
+    st.write("Conviction = (1 - support(B)) / (1 - confidence): 1 is the independence baseline, larger values indicate fewer counterexamples than expected. Perfect confidence gives infinity unless B is universal, when it is undefined. Jaccard = support(A union B) / (support(A) + support(B) - support(A union B)); cosine = support(A union B) / sqrt(support(A) * support(B)). Both range from 0 to 1 and measure overlap, without an independence baseline. Count is the number of baskets supporting both sides.")
     st.write("### Advantages")
     st.write("Produces interpretable combinations and directional rules for basket analysis, recommendations, and exploratory pattern discovery.")
     st.write("### Disadvantages")
@@ -144,6 +159,8 @@ def run_miner(section, algorithm, miner):
     if rules.empty:
         st.info('No rules meet the thresholds. Try lower confidence or allow longer itemsets.')
     else:
+        ranking = st.selectbox('Rank rules by', ['Lift', 'Confidence', 'Leverage', 'Conviction', 'Jaccard', 'Cosine', 'Support', 'Count'], key=f'{algorithm}_ranking')
+        rules = rules.sort_values([ranking, 'Confidence'] if ranking != 'Confidence' else ['Confidence'], ascending=False, na_position='last')
         st.dataframe(rules, hide_index=True, use_container_width=True)
         st.bar_chart(rules.head(10).assign(Rule=lambda r: r['Antecedent']+' → '+r['Consequent']).set_index('Rule')['Lift'])
-        st.caption('Top ten rules ranked by lift, then confidence. These are exploratory patterns in synthetic training transactions.')
+        st.caption(f'Top ten rules by {ranking}, showing their lift. Undefined conviction is blank; infinity means perfect confidence with a non-universal consequent. These are exploratory patterns in synthetic training transactions.')

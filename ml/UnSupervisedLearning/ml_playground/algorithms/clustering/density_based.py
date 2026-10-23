@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.cluster import DBSCAN
-from sklearn.metrics import silhouette_score
+from ._clustering_common import separation_scores, show_score_metrics
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
@@ -43,15 +43,11 @@ def write_explanation():
 
 
 def fit_density(X_scaled, eps, min_samples):
-    """Return the fitted model and silhouette on non-noise observations only."""
+    """Return the fitted model and internal scores excluding noise observations."""
     model = DBSCAN(eps=eps, min_samples=min_samples).fit(X_scaled)
     retained = model.labels_ != -1
     labels = model.labels_[retained]
-    score = (
-        silhouette_score(X_scaled[retained], labels)
-        if 2 <= len(np.unique(labels)) < len(labels) else None
-    )
-    return model, score
+    return model, separation_scores(X_scaled[retained], labels)
 
 
 def run(section=None, algorithm=None):
@@ -100,21 +96,22 @@ def run(section=None, algorithm=None):
     st.caption("Inspect the bend and try nearby radii. eps = 0.3 is an initial value, not an automatically optimized choice.")
 
     st.subheader("3. Inspect clusters and noise")
-    model, score = fit_density(X_scaled, eps, min_samples)
+    model, scores = fit_density(X_scaled, eps, min_samples)
     labels = model.labels_
     cluster_ids = sorted(set(labels) - {-1})
     noise_count = int((labels == -1).sum())
-    columns = st.columns(4)
+    columns = st.columns(3)
     columns[0].metric("Clusters", len(cluster_ids))
     columns[1].metric("Noise observations", noise_count)
     columns[2].metric("Noise percentage", f"{100 * noise_count / len(X):.1f}%")
-    columns[3].metric("Silhouette (excluding noise)", f"{score:.4f}" if score is not None else "Not defined")
+    show_score_metrics(scores, suffix=" (excluding noise)")
+    st.caption("All separation scores exclude noise. Compare the retained fraction as parameter changes can change which observations are evaluated.")
     if not cluster_ids:
         st.warning("All observations are noise. Try a larger eps or a smaller min_samples and inspect the resulting groups.")
     elif len(cluster_ids) == 1:
-        st.info("One cluster was found. Silhouette cannot compare separation between clusters in this result.")
-    elif score is None:
-        st.info("Silhouette is undefined for this partition of the retained observations.")
+        st.info("One cluster was found. Internal separation scores require at least two clusters.")
+    elif pd.isna(scores["Silhouette score"]):
+        st.info("Internal separation scores are undefined for this partition of the retained observations.")
 
     core = np.zeros(len(X), dtype=bool)
     core[model.core_sample_indices_] = True

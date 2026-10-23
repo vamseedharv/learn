@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 from sklearn.cluster import MeanShift, estimate_bandwidth
 
-from ._clustering_common import prepare_data, evaluate_labels, show_results
+from ._clustering_common import prepare_data, evaluate_labels, show_results, show_score_comparison
 
 
 def write_explanation():
@@ -58,6 +58,7 @@ def run(section=None, algorithm=None):
         rows.append({"Bandwidth": candidate, **evaluate_labels(X_scaled, model.labels_)})
     results = pd.DataFrame(rows)
     st.dataframe(results, hide_index=True, use_container_width=True)
+    show_score_comparison(results, "Bandwidth")
     st.caption("Nearby bandwidths are comparisons; the result below uses your chosen bandwidth, not an automatically selected score winner.")
     model = models[bandwidth]
     if model.n_iter_ >= 300:

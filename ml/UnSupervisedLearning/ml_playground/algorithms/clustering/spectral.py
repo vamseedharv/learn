@@ -10,7 +10,7 @@ from sklearn.cluster import SpectralClustering
 from sklearn.metrics.pairwise import rbf_kernel
 from sklearn.neighbors import kneighbors_graph
 
-from ._clustering_common import prepare_data, evaluate_labels, show_results
+from ._clustering_common import prepare_data, evaluate_labels, show_results, show_score_comparison
 
 
 def write_explanation():
@@ -88,6 +88,7 @@ def run(section=None, algorithm=None):
         st.warning(message)
     results = pd.DataFrame(rows)
     st.dataframe(results, hide_index=True, use_container_width=True)
+    show_score_comparison(results, "K")
     valid = results.dropna(subset=["Silhouette score"])
     best_k = int(valid.loc[valid["Silhouette score"].idxmax(), "K"]) if not valid.empty else 2
     st.caption("The default K has the best tested Euclidean silhouette, when defined. Inspect graph connectivity and cluster shapes as well.")

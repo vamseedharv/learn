@@ -8,7 +8,7 @@ import streamlit as st
 from sklearn.decomposition import PCA, NMF
 from sklearn.manifold import LocallyLinearEmbedding, Isomap, trustworthiness
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.neighbors import kneighbors_graph
+from sklearn.neighbors import kneighbors_graph, NearestNeighbors
 from scipy.sparse.csgraph import connected_components
 
 FEATURES = ['Age', 'Study_Hours', 'Attendance_Percent', 'Practice_Tests', 'Previous_Score', 'Activity_Hours']
@@ -54,6 +54,35 @@ def explanation(kind):
     st.write('A separated 2D picture is not proof of real classes. Check multiple parameter choices and evaluate held-out data for a predictive task. Fit preprocessing and the reducer on training data only in that setting. This page fits the full dataset for exploration.')
     st.write('### About this example')
     st.write('The six numeric student features are reduced to selected coordinates. Outcome labels do not affect fitting. PCA and NMF include feature-component tables; nonlinear embeddings have no equivalent original-feature loadings.')
+
+
+def evaluate_embedding(values, embedded, n_neighbors):
+    """Evaluate introduced neighbors, lost neighbors, and shared neighborhoods."""
+    original = NearestNeighbors(n_neighbors=n_neighbors).fit(values).kneighbors(return_distance=False)
+    reduced = NearestNeighbors(n_neighbors=n_neighbors).fit(embedded).kneighbors(return_distance=False)
+    overlap = np.mean([len(set(a) & set(b)) / n_neighbors for a, b in zip(original, reduced)])
+    return {
+        'Trustworthiness': trustworthiness(values, embedded, n_neighbors=n_neighbors),
+        'Continuity': trustworthiness(embedded, values, n_neighbors=n_neighbors),
+        'Neighbor overlap': float(overlap),
+    }
+
+
+def evaluate_reconstruction(values, reconstructed):
+    """Feature reconstruction diagnostics in the preprocessing scale."""
+    residual = values - reconstructed
+    norm = np.linalg.norm(values)
+    return {
+        'Reconstruction MSE': float(np.mean(residual ** 2)),
+        'Reconstruction RMSE': float(np.sqrt(np.mean(residual ** 2))),
+        'Reconstruction MAE': float(np.mean(np.abs(residual))),
+        'Relative reconstruction error': float(np.linalg.norm(residual) / norm) if norm > 0 else np.nan,
+    }
+
+
+def show_evaluation(metrics):
+    for column, (name, value) in zip(st.columns(len(metrics)), metrics.items()):
+        column.metric(name, f'{value:.4f}' if np.isfinite(value) else 'Not defined')
 
 
 def run_reducer(section, algorithm, kind):
@@ -106,9 +135,9 @@ def run_reducer(section, algorithm, kind):
         st.error(f'Embedding could not be computed: {error}. Try different components or neighbors, and inspect duplicate or constant features.')
         return
     st.subheader('3. Evaluate the representation')
-    evaluation_neighbors=min(5,(len(X)-1)//2)
-    quality=trustworthiness(values,embedded,n_neighbors=evaluation_neighbors)
-    st.metric(f'Trustworthiness ({evaluation_neighbors} neighbors)',f'{quality:.4f}')
+    evaluation_neighbors=int(st.number_input('Evaluation neighbors', min_value=1, max_value=(len(X)-1)//2, value=min(5,(len(X)-1)//2), step=1, key=f'{kind}_evaluation_neighbors'))
+    show_evaluation(evaluate_embedding(values, embedded, evaluation_neighbors))
+    st.caption('All three neighborhood scores range from 0 to 1; higher is better. Trustworthiness penalizes introduced neighbors, continuity penalizes lost neighbors, and overlap is the fraction of shared nearest neighbors. Scores use the selected evaluation neighborhood and preprocessed feature space; distance ties can affect them.')
     names=[f'Component {i+1}' for i in range(components)]
     if kind=='pca':
         full=PCA(svd_solver='full').fit(values)
@@ -116,17 +145,19 @@ def run_reducer(section, algorithm, kind):
         st.dataframe(variance,hide_index=True)
         st.line_chart(variance.set_index('Component'))
         st.metric('Retained explained variance',f'{100*model.explained_variance_ratio_.sum():.2f}%')
-        st.metric('Reconstruction MSE (scaled space)',f'{np.mean((values-model.inverse_transform(embedded))**2):.6f}')
+        show_evaluation(evaluate_reconstruction(values, model.inverse_transform(embedded)))
         st.write('Principal-axis coefficients on standardized features (signs are arbitrary)')
         st.dataframe(pd.DataFrame(model.components_,index=names,columns=FEATURES))
     elif kind=='nmf':
-        st.metric('Reconstruction MSE (scaled space)',f'{np.mean((values-embedded@model.components_)**2):.6f}')
+        show_evaluation(evaluate_reconstruction(values, embedded @ model.components_))
         st.write('Non-negative component contributions in MinMax-scaled feature space')
         st.dataframe(pd.DataFrame(model.components_,index=names,columns=FEATURES))
     else:
         error=model.reconstruction_error_ if kind=='lle' else model.reconstruction_error()
         st.metric('Local reconstruction objective' if kind=='lle' else 'Geodesic reconstruction error',f'{error:.6f}')
         st.caption('This method-specific quantity is not feature reconstruction MSE and is not comparable to PCA or NMF reconstruction error.')
+    if kind in ['pca', 'nmf']:
+        st.caption('Lower reconstruction errors are better. MSE, RMSE and MAE use scaled features; relative error is the residual Frobenius norm divided by the input norm. These are training diagnostics and are not directly comparable across preprocessing scales.')
     st.subheader('4. Explore the embedding')
     reduced=pd.DataFrame(embedded,index=X.index,columns=names)
     fig,ax=plt.subplots()
